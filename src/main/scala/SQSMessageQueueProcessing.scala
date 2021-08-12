@@ -1,42 +1,67 @@
 package org.example
 
-import com.amazon.sqs.javamessaging.{ProviderConfiguration, SQSConnection, SQSConnectionFactory}
+import com.amazon.sqs.javamessaging.SQSConnection
+import com.amazonaws.services.sqs.model.CreateQueueRequest
 
-import javax.jms.{Queue, Session}
-import com.amazonaws.services.sqs.AmazonSQSClientBuilder
-import org.apache.log4j.PropertyConfigurator
+import java.util
+import java.util.Scanner
+import javax.jms.{MessageListener, MessageProducer, Queue, Session, TextMessage}
 
-
-/**
- * @see <a href="https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/getting-started.html"> AWS SQS getting started </a>
- */
-trait SQSMessageQueueProcessing extends Logging {
-
-  val SQS_QUEUE_NAME = "MyQueue"
-
-  PropertyConfigurator.configure(getClass.getResourceAsStream("/conf/log4j.properties"))
-
-  /**
-   * Create a new connection factory
-   * with all defaults (credentials and region) set automatically
-   */
-  val connectionFactory = new SQSConnectionFactory(new ProviderConfiguration, AmazonSQSClientBuilder.defaultClient())
+abstract class SQSMessageQueueProcessing(val queueName: String, isFifo: Boolean) extends Logging {
 
   /**
    * Creates a connection to SQS
    */
-  val connection: SQSConnection = connectionFactory.createConnection()
+  val connection: SQSConnection = SqsConnectionFactory.getConnection
 
   /**
    * Create the non transacted session with AUTO_ACKNOWLEDGE mode
    */
   val session: Session = connection.createSession(false, Session.AUTO_ACKNOWLEDGE)
 
-  /**
-   * Create a queue identity and specify the queue name to the session
-   */
-  val queue: Queue = session.createQueue(SQS_QUEUE_NAME)
+  val queue: Queue = createQueueIfNotExists(queueName, session)
 
-  def main(args: Array[String]): Unit
+  def startConsuming(messageListener: MessageListener): Unit = {
+    val fifoConsumer = session.createConsumer(queue)
+    fifoConsumer.setMessageListener(messageListener)
+    connection.start()
+  }
+
+  def startProducing(messageGenerator: () => TextMessage, waitInterval: Int, sendMessageCount: Int = 10): Unit = {
+    val producer: MessageProducer = session.createProducer(queue)
+    (1 to sendMessageCount).foreach(_ => {
+      val message = messageGenerator()
+      Thread.sleep(waitInterval)
+      producer.send(message)
+      logger.info(s"Sent JMS message to $queueName, message=${message.getText}")
+    })
+
+    new Scanner(System.in).nextLine()
+    connection.close()
+  }
+
+  /**
+   * Queue has to be specified before using.
+   * Creates a queue identity and specify the queue name to the session
+   *
+   * @param queueName - name of
+   * @param session - sqsConnectionSession
+   * @return sessionQueue
+   */
+  private def createQueueIfNotExists(queueName: String, session: Session): Queue = {
+    if (isFifo) {
+      val client = connection.getWrappedAmazonSQSClient
+      val attributes = new util.HashMap[String, String]()
+      attributes.put("FifoQueue", "true")
+      attributes.put("ContentBasedDeduplication", "true")
+      client.createQueue(new CreateQueueRequest().withQueueName(queueName)
+        .withAttributes(attributes))
+    } else {
+      val client = connection.getWrappedAmazonSQSClient
+      if (!client.queueExists(queueName)) client.createQueue(queueName)
+    }
+    session.createQueue(queueName)
+  }
+
 
 }
