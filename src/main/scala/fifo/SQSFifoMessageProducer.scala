@@ -7,6 +7,7 @@ import javax.jms.TextMessage
 /**
  * <h1>First in First out.</h1>
  * Guaranties that the messages will be retrieved in the order they were sent.
+ * Guaranties that the messages will be send exactly one time
  *
  * Duplicates aren't introduced into the queue.
  * (Duplicate message -> message1.deduplicationId == message2.deduplicationId).
